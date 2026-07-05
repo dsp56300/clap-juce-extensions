@@ -645,12 +645,30 @@ class ClapJuceWrapper : public clap::helpers::Plugin<
             // At the moment, CLAP doesn't have a sense of programs (to my knowledge).
             // (I think) what makes most sense is to tell the host to update the parameters
             // as though a preset has been loaded.
+            //
+            // paramsRescan(CLAP_PARAM_RESCAN_VALUES) alone is not enough for some hosts
+            // (e.g. Bitwig): their parameter widgets and remote controls only follow the
+            // actual CLAP_EVENT_PARAM_VALUE output-event stream, not a bare rescan hint.
+            // So we additionally replay every parameter's current value through the same
+            // queue the UI/gesture path uses - that reliably moves the host-side controls
+            // on preset load (and on the initial patch after instantiation).
             runOnMainThread([this] {
                 if (isBeingDestroyed())
                     return;
 
-                if (_host.canUseParams())
-                    _host.paramsRescan(CLAP_PARAM_RESCAN_VALUES);
+                if (!_host.canUseParams())
+                    return;
+
+                for (const auto &it : paramPtrByClapID)
+                {
+                    const auto &pbi = it.second;
+                    const auto value =
+                        getUnNormalisedParameterValue(pbi, pbi.processorParam->getValue());
+                    uiParamChangeQ.push({CLAP_EVENT_PARAM_VALUE, 0, it.first, value});
+                }
+
+                _host.paramsRescan(CLAP_PARAM_RESCAN_VALUES);
+                _host.paramsRequestFlush();
             });
         }
 #if JUCE_VERSION >= 0x060103
